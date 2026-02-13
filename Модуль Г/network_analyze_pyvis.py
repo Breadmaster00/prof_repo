@@ -1,87 +1,157 @@
 import pandas as pd
 import networkx as nx
 from sqlalchemy import create_engine
-import plotly.graph_objects as go
+from pyvis.network import Network
 
-# 1. Загрузка
-engine = create_engine('postgresql://postgres:7681@localhost:5433/prof_db')
+# 1. Подключение к базе
+engine = create_engine('postgresql://postgres:7681@localhost:5432/prof_db')
+
+# 2. Загрузка данных
 nodes = pd.read_sql_table('team_rksi_graph_nodes', engine, schema='team_rksi')
 edges = pd.read_sql_table('team_rksi_graph_edges', engine, schema='team_rksi')
 
-# 2. Граф
+# 3. Создаём словарь для быстрого доступа к названиям
 id_to_label = dict(zip(nodes['node_id'], nodes['node_label']))
-G = nx.Graph()
-for _, row in edges.iterrows():
-    G.add_edge(
-        id_to_label[row['source']], 
-        id_to_label[row['target']], 
-        weight=float(row['weight'])
-    )
 
-# 3. Метрики
-degrees = nx.degree(G, weight='weight')
+# 4. Строим граф с названиями категорий (удобнее для визуализации)
+G = nx.Graph()
+
+# Добавляем рёбра сразу с названиями
+for _, row in edges.iterrows():
+    source_name = id_to_label[row['source']]
+    target_name = id_to_label[row['target']]
+    G.add_edge(source_name, target_name, weight=row['weight'])
+
+print(f"Граф построен: {G.number_of_nodes()} узлов, {G.number_of_edges()} рёбер")
+
+# 5. Рассчитываем метрики
+degrees = nx.degree(G, weight='weight')  # Взвешенная степень
 betweenness = nx.betweenness_centrality(G, weight='weight')
 closeness = nx.closeness_centrality(G, distance='weight')
 
-# 4. Сообщества
-try:
-    import community as community_louvain
-    partition = community_louvain.best_partition(G, weight='weight')
-except:
-    from networkx.algorithms import community
-    comms = list(community.greedy_modularity_communities(G, weight='weight'))
-    partition = {}
-    for i, comm in enumerate(comms):
-        for node in comm:
-            partition[node] = i
 
-# 5. Позиционирование
-pos = nx.spring_layout(G, seed=42, weight='weight')
+# 6. Создаём интерактивный граф PyVis
+net = Network(
+    height='750px',
+    width='100%',
+    bgcolor='#ffffff',
+    font_color='#333333'
+)
 
-# 6. Данные для графика
-edge_x, edge_y = [], []
-for u, v in G.edges():
-    x0, y0 = pos[u]
-    x1, y1 = pos[v]
-    edge_x.extend([x0, x1, None])
-    edge_y.extend([y0, y1, None])
+# Настраиваем физику (чтобы граф был красивым)
+net.repulsion(
+    node_distance=200,
+    central_gravity=0.2,
+    spring_length=150,
+    spring_strength=0.05,
+    damping=0.09
+)
 
-node_x = [pos[node][0] for node in G.nodes()]
-node_y = [pos[node][1] for node in G.nodes()]
-
-# 7. Создаём график
-fig = go.Figure()
-
-# Рёбра - ВСЕ ОДИНАКОВОЙ ТОЛЩИНЫ
-fig.add_trace(go.Scatter(
-    x=edge_x, y=edge_y,
-    line=dict(width=1, color='rgba(150,150,150,0.5)'),
-    hoverinfo='none',
-    mode='lines'
-))
-
-# Узлы с подсказками
-node_text = [
-    f"<b>{node}</b><br>Сообщество: {partition.get(node,0)}<br>Связей: {degrees[node]:.0f}<br>Betweenness: {betweenness[node]:.3f}"
-    for node in G.nodes()
-]
-
-fig.add_trace(go.Scatter(
-    x=node_x, y=node_y,
-    mode='markers+text',
-    text=list(G.nodes()),
-    textposition="top center",
-    hovertext=node_text,
-    hoverinfo='text',
-    marker=dict(
-        showscale=True,
-        colorscale='Blues',
-        color=[betweenness[node] for node in G.nodes()],
-        size=[max(10, degrees[node] / 3) for node in G.nodes()],
-        line_width=1
+# 7. Добавляем узлы с атрибутами
+for node in G.nodes():
+    # Определяем цвет сообщества
+    community_colors = [
+        '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+        '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9'
+    ]
+    color = community_colors[partition[node] % len(community_colors)]
+    
+    # Размер узла = взвешенная степень
+    size = max(20, min(80, degrees[node] * 0.5))
+    
+    # Подсказка при наведении
+    hover_text = f"""
+    <b>{node}</b><br>
+    Сообщество: {partition[node]}<br>
+    Связей: {G.degree(node)}<br>
+    Вес связей: {degrees[node]:.1f}<br>
+    Betweenness: {betweenness[node]:.3f}<br>
+    Closeness: {closeness[node]:.3f}    
+    """
+    
+    net.add_node(
+        node,
+        label=node,
+        title=hover_text,
+        size=size,
+        color=color,
+        borderWidth=2
     )
-))
 
-# 8. Сохраняем
-fig.write_html("team_rksi_plotly.html")
-print("Готово: team_rksi_plotly.html")
+# 8. Добавляем рёбра
+for u, v, data in G.edges(data=True):
+    weight = data.get('weight', 1)
+    
+    # Толщина линии = вес связи
+    width = max(1, min(5, weight / 20))
+    
+    # Цвет ребра в зависимости от силы связи
+    if weight > 50:
+        edge_color = '#FF4444'
+    elif weight > 20:
+        edge_color = '#FFA726'
+    else:
+        edge_color = '#42A5F5'
+    
+    net.add_edge(
+        u, v,
+        value=width,
+        title=f"Совместных покупок: {weight}",
+        color=edge_color
+    )
+
+# 9. Настраиваем интерфейс
+net.show_buttons(filter_=['physics', 'nodes', 'edges', 'layout', 'interaction'])
+
+# 10. Сохраняем
+output_file = 'team_rksi_graph.html'
+net.save_graph(output_file)
+print(f"✅ Интерактивный граф сохранён: {output_file}")
+
+# 11. Выводим рекомендации
+print("\n" + "="*60)
+print("АНАЛИТИЧЕСКИЕ ВЫВОДЫ И РЕКОМЕНДАЦИИ")
+print("="*60)
+
+# Топ-5 самых сильных связей (бандлы)
+sorted_edges = sorted(G.edges(data=True), 
+                     key=lambda x: x[2].get('weight', 0), 
+                     reverse=True)[:5]
+print("\n🎯 ТОП-5 бандлов для кросс-села:")
+for i, (u, v, data) in enumerate(sorted_edges, 1):
+    print(f"  {i}. {u} + {v}: {data['weight']} совместных покупок")
+
+# Топ-5 самых связанных категорий
+sorted_degrees = sorted(degrees.items(), key=lambda x: x[1], reverse=True)[:5]
+print("\n🏆 Самые популярные категории:")
+for i, (cat, score) in enumerate(sorted_degrees, 1):
+    print(f"  {i}. {cat}: {score:.1f} суммарный вес связей")
+
+# Топ-5 мостовых категорий (точки риска)
+sorted_betweenness = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)[:5]
+print("\n⚠️  Критические точки (мостовые категории):")
+for i, (cat, score) in enumerate(sorted_betweenness, 1):
+    print(f"  {i}. {cat}: betweenness = {score:.3f}")
+
+# Анализ сообществ
+print("\n👥 Обнаруженные сообщества (готовые наборы):")
+community_groups = {}
+for node, comm_id in partition.items():
+    community_groups.setdefault(comm_id, []).append(node)
+
+for comm_id, categories in community_groups.items():
+    if len(categories) >= 3:  # Показываем только группы из 3+ категорий
+        print(f"  • Сообщество {comm_id}: {', '.join(categories[:5])}")
+        if len(categories) > 5:
+            print(f"    ... и ещё {len(categories) - 5} категорий")
+
+print("\n" + "="*60)
+print("📊 МЕТРИКИ СЕТИ:")
+print(f"  • Узлов (категорий): {G.number_of_nodes()}")
+print(f"  • Рёбер (связей): {G.number_of_edges()}")
+print(f"  • Плотность сети: {nx.density(G):.3f}")
+print(f"  • Обнаружено сообществ: {len(set(partition.values()))}")
+print("="*60)
+print("📁 Файлы:")
+print(f"  • team_rksi_graph.html - интерактивный граф (открыть в браузере)")
+print("="*60)
