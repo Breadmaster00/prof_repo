@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS team_rksi.team_rksi_mart_orders (
     order_month_year 	date,
     order_delivered_ts 	timestamp,
 	order_estimated_date date,
-    delivery_days 		interval,
+    delivery_days 		integer,
 	
     customer_unique_id  text,
 	customer_city 		text,
@@ -63,21 +63,20 @@ SELECT
     date_trunc('month', order_purchase_ts)::date as order_month_year,
     order_delivered_ts,
 	order_estimated_delivery_ts,
-    date_trunc('day', order_delivered_ts - order_purchase_ts) as delivery_days,
+    date_trunc('day', order_delivered_ts - order_purchase_ts)::integer as delivery_days,
     customer_unique_id,
 	customer_city,
     customer_state,
 	order_price,
 	order_freight,
 	order_total,
-	COALESCE(paid_total, 0) as paid_total,
+	paid_total,
 	review_score
 FROM team_rksi.team_rksi_cleared_orders
 JOIN team_rksi.team_rksi_cleared_customers USING(customer_id)
 LEFT JOIN agg_order_items USING(order_id)
 LEFT JOIN agg_payments USING(order_id)
 LEFT JOIN team_rksi.team_rksi_cleared_reviews USING(order_id)
-WHERE order_purchase_ts > (SELECT COALESCE(MAX(order_purchase_ts), '1970-01-01') FROM team_rksi.team_rksi_mart_orders)
 ORDER BY order_purchase_ts
 
 ON CONFLICT(order_id) DO UPDATE
