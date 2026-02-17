@@ -1,3 +1,4 @@
+
 CREATE TABLE IF NOT EXISTS team_rksi.team_rksi_mart_orders (
     order_id 			text PRIMARY KEY,
     order_status 		text,
@@ -63,7 +64,7 @@ SELECT
     date_trunc('month', order_purchase_ts)::date as order_month_year,
     order_delivered_ts,
 	order_estimated_delivery_ts,
-    date_trunc('day', order_delivered_ts - order_purchase_ts)::integer as delivery_days,
+    EXTRACT(DAY FROM order_delivered_ts - order_purchase_ts)::integer as delivery_days,
     customer_unique_id,
 	customer_city,
     customer_state,
