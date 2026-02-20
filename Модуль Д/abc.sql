@@ -6,7 +6,7 @@ WITH m AS (
 	count(*) cnt_segments,
     sum(s.price) AS revenue
   FROM bookings.segments s
-  JOIN bookings.flights f ON f.flight_id = s.flight_id
+  JOIN timetable f ON f.flight_id = s.flight_id
   GROUP BY 1,2
 ),
 ranked AS (
@@ -31,3 +31,29 @@ SELECT
   END AS abc_class
 FROM ranked
 ORDER BY month, revenue DESC;
+
+SELECT 
+	month, fare_conditions, revenue,
+	revenue / sum AS share,
+	revenue_cum / sum as cum_share,
+	CASE
+	  WHEN revenue_cum / sum <= 0.80 then 'A'
+	  when revenue_cum / sum <= 0.95 THEN 'B'
+	  ELSE 'C'
+	END AS abc_class
+FROM (
+	SELECT *,
+		sum(revenue) over(partition by month),
+		sum(revenue) over(partition by month order by revenue DESC, fare_conditions
+		ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) as revenue_cum
+	FROM (
+		SELECT
+			date_trunc('month', scheduled_departure)::date as month,
+			fare_conditions,
+			sum(price) as revenue
+		FROM segments
+		JOIN timetable USING(flight_id)
+		GROUP BY 1, 2
+	)
+)
+order by month, revenue DESC
